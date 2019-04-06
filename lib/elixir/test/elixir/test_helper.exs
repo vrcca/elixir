@@ -79,6 +79,11 @@ defmodule CodeFormatterHelpers do
       result = String.trim(good)
       assert IO.iodata_to_binary(Code.format_string!(bad, opts)) == result
       assert IO.iodata_to_binary(Code.format_string!(good, opts)) == result
+
+      {:ok, _doc} =
+        bad
+        |> Code.string_to_quoted!()
+        |> Code.Formatter.public_quoted_to_algebra(_options = [])
     end
   end
 end

@@ -204,14 +204,12 @@ defmodule Code.Formatter do
 
     with {:ok, tokens} <- :elixir.string_to_tokens(charlist, line, file, tokenizer_options),
          {:ok, forms} <- :elixir.tokens_to_quoted(tokens, file, formatter_metadata: true) do
-      state =
+      comments =
         Process.get(:code_formatter_comments)
         |> Enum.reverse()
         |> gather_comments()
-        |> state(opts)
 
-      {doc, _} = block_to_algebra(forms, @min_line, @max_line, state)
-      {:ok, doc}
+      public_quoted_to_algebra(forms, opts, comments)
     end
   after
     Process.delete(:code_formatter_comments)
@@ -232,6 +230,12 @@ defmodule Code.Formatter do
       {:error, {line, error, token}} ->
         :elixir_errors.parse_error(line, Keyword.get(opts, :file, "nofile"), error, token)
     end
+  end
+
+  def public_quoted_to_algebra(quoted, opts, comments \\ []) do
+    state = state(comments, opts)
+    {doc, _} = block_to_algebra(quoted, @min_line, @max_line, state)
+    {:ok, doc}
   end
 
   defp state(comments, opts) do
@@ -581,6 +585,14 @@ defmodule Code.Formatter do
     {doc, state}
   end
 
+  # Literals are always wrapped in blocks when code is parsed with formatter metadata,
+  # but handling literals not wrapped in code blocks means we can use quoted_to_algebra/3
+  # with user-provided AST as well.
+  defp quoted_to_algebra(literal, _context, state)
+       when is_atom(literal) or is_number(literal) or is_binary(literal) do
+    literal_without_formatter_meta_to_algebra(literal, state)
+  end
+
   ## Blocks
 
   defp block_to_algebra([{:->, _, _} | _] = type_fun, min_line, max_line, state) do
@@ -600,10 +612,17 @@ defmodule Code.Formatter do
   end
 
   defp block_args_to_algebra(args, min_line, max_line, state) do
-    quoted_to_algebra = fn {kind, meta, _} = arg, _args, doc_newlines, state ->
-      doc_newlines = Keyword.get(meta, :newlines, doc_newlines)
+    quoted_to_algebra = fn arg, _args, doc_newlines, state ->
       {doc, state} = quoted_to_algebra(arg, :block, state)
-      {doc, block_next_line(kind), doc_newlines, state}
+
+      case arg do
+        {kind, meta, _} ->
+          doc_newlines = Keyword.get(meta, :newlines, doc_newlines)
+          {doc, block_next_line(kind), doc_newlines, state}
+
+        _other ->
+          {doc, break(""), doc_newlines, state}
+      end
     end
 
     {args_docs, _comments?, state} =
@@ -1878,6 +1897,22 @@ defmodule Code.Formatter do
     many_args_to_algebra(args, state, &quoted_to_algebra(&1, :no_parens_arg, &2))
   end
 
+  defp literal_without_formatter_meta_to_algebra(atom, state) when is_atom(atom) do
+    {atom_to_algebra(atom), state}
+  end
+
+  defp literal_without_formatter_meta_to_algebra(int, state) when is_integer(int) do
+    {Integer.to_string(int), state}
+  end
+
+  defp literal_without_formatter_meta_to_algebra(float, state) when is_float(float) do
+    {Float.to_string(float), state}
+  end
+
+  defp literal_without_formatter_meta_to_algebra(binary, state) when is_binary(binary) do
+    {inspect(binary), state}
+  end
+
   ## Quoted helpers for comments
 
   defp quoted_to_algebra_with_comments(args, acc, min_line, max_line, newlines, state, fun) do
@@ -2186,6 +2221,7 @@ defmodule Code.Formatter do
       case arg do
         {{_, meta, _}, _} -> line(meta)
         {_, meta, _} -> line(meta)
+        _other -> :not_a_line
       end
 
     if MapSet.member?(lines, line) do
