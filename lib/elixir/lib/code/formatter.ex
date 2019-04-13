@@ -1377,7 +1377,7 @@ defmodule Code.Formatter do
   defp maybe_sigil_to_algebra(fun, meta, args, state) do
     case {Atom.to_string(fun), args} do
       {<<"sigil_", name>>, [{:<<>>, _, entries}, modifiers]} ->
-        opening_terminator = Keyword.fetch!(meta, :terminator)
+        opening_terminator = read_or_infer_sigil_opening_terminator(name, entries, meta)
         doc = <<?~, name, opening_terminator::binary>>
 
         if opening_terminator in [@double_heredoc, @single_heredoc] do
@@ -1397,6 +1397,32 @@ defmodule Code.Formatter do
 
       _ ->
         :error
+    end
+  end
+
+  defp read_or_infer_sigil_opening_terminator(name, entries, meta) do
+    case Keyword.fetch(meta, :terminator) do
+      {:ok, terminator} -> terminator
+      :error -> infer_sigil_opening_terminator(name, entries)
+    end
+  end
+
+  defp infer_sigil_opening_terminator(name, entries) do
+    literals = Enum.filter(entries, &is_binary/1)
+
+    does_not_contain? = fn literals, escaped ->
+      Enum.all?(literals, fn lit -> :binary.match(lit, escaped) == :nomatch end)
+    end
+
+    cond do
+      does_not_contain?.(literals, ["\""]) -> "\""
+      does_not_contain?.(literals, ["'"]) -> "'"
+      does_not_contain?.(literals, ["|"]) -> "|"
+      does_not_contain?.(literals, ["(", ")"]) -> "("
+      does_not_contain?.(literals, ["[", "]"]) -> "["
+      does_not_contain?.(literals, ["{", "}"]) -> "{"
+      does_not_contain?.(literals, ["<", ">"]) -> "<"
+      true -> "/"
     end
   end
 
