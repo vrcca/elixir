@@ -1377,7 +1377,7 @@ defmodule Code.Formatter do
   defp maybe_sigil_to_algebra(fun, meta, args, state) do
     case {Atom.to_string(fun), args} do
       {<<"sigil_", name>>, [{:<<>>, _, entries}, modifiers]} ->
-        opening_terminator = read_or_infer_sigil_opening_terminator(name, entries, meta)
+        opening_terminator = read_or_infer_sigil_opening_terminator(entries, meta)
         doc = <<?~, name, opening_terminator::binary>>
 
         if opening_terminator in [@double_heredoc, @single_heredoc] do
@@ -1400,14 +1400,14 @@ defmodule Code.Formatter do
     end
   end
 
-  defp read_or_infer_sigil_opening_terminator(name, entries, meta) do
+  defp read_or_infer_sigil_opening_terminator(entries, meta) do
     case Keyword.fetch(meta, :terminator) do
       {:ok, terminator} -> terminator
-      :error -> infer_sigil_opening_terminator(name, entries)
+      :error -> infer_sigil_opening_terminator(entries)
     end
   end
 
-  defp infer_sigil_opening_terminator(name, entries) do
+  defp infer_sigil_opening_terminator(entries) do
     literals = Enum.filter(entries, &is_binary/1)
 
     does_not_contain? = fn literals, escaped ->
@@ -2102,6 +2102,10 @@ defmodule Code.Formatter do
 
   defp wrap_in_parens(doc) do
     concat(concat("(", nest(doc, :cursor)), ")")
+  end
+
+  defp many_args_to_algebra([], state, _fun) do
+    {"", state}
   end
 
   defp many_args_to_algebra([arg | args], state, fun) do
