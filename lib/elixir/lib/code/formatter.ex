@@ -28,7 +28,7 @@ defmodule Code.Formatter do
   @required_parens_logical_binary_operands [:||, :|||, :or, :&&, :&&&, :and]
 
   # Operators with next break fits. = and :: do not consider new lines though
-  @next_break_fits_operators [:<-, :==, :!=, :=~, :===, :!==, :<, :>, :<=, :>=, :=, :"::"]
+  @next_break_fits_operators [:<-, :==, :!=, :=~, :===, :!==, :<, :>, :<=, :>=, :=, :::]
 
   # Operators that always require parens on operands when they are the parent
   @required_parens_on_binary_operands [
@@ -542,6 +542,7 @@ defmodule Code.Formatter do
   # [keyword: :list] (inner part)
   # %{:foo => :bar} (inner part)
   defp quoted_to_algebra(list, context, state) when is_list(list) do
+    IO.inspect(list)
     many_args_to_algebra(list, state, &quoted_to_algebra(&1, context, &2))
   end
 
@@ -553,16 +554,11 @@ defmodule Code.Formatter do
         {left, state} =
           case left_arg do
             {:__block__, _, [atom]} when is_atom(atom) ->
-              key =
-                case Code.Identifier.classify(atom) do
-                  type when type in [:callable_local, :callable_operator, :not_callable] ->
-                    IO.iodata_to_binary([Atom.to_string(atom), ?:])
+              {atom_to_keyword_key(atom), state}
 
-                  _ ->
-                    IO.iodata_to_binary([?", Atom.to_string(atom), ?", ?:])
-                end
-
-              {string(key), state}
+            # No formatter metadata and no :__block__ literals.
+            atom when is_atom(atom) ->
+              {atom_to_keyword_key(atom), state}
 
             {{:., _, [:erlang, :binary_to_atom]}, _, [{:<<>>, _, entries}, :utf8]} ->
               interpolation_to_algebra(entries, @double_quote, state, "\"", "\":")
@@ -1284,6 +1280,19 @@ defmodule Code.Formatter do
     end
   end
 
+  # If the keyword list starts with "do: ...", then we check if all the keys are
+  # valid keywords like "else" and "rescue". If they are, we force the do/end format.
+  # If they're not, we force the "do: ..." format.
+  defp do_end_blocks([{:do, _do_body} | rest] = blocks) do
+    if Enum.all?(rest, fn {key, _body} -> key in [:else, :rescue, :catch, :after] end) do
+      blocks
+      |> Enum.map(fn {key, body} -> {key, line([]), body} end)
+      |> do_end_blocks_with_range(end_line([]))
+    else
+      nil
+    end
+  end
+
   defp do_end_blocks(_) do
     nil
   end
@@ -1324,7 +1333,7 @@ defmodule Code.Formatter do
 
   defp interpolated?(entries) do
     Enum.all?(entries, fn
-      {:"::", _, [{{:., _, [Kernel, :to_string]}, _, [_]}, {:binary, _, _}]} -> true
+      {:::, _, [{{:., _, [Kernel, :to_string]}, _, [_]}, {:binary, _, _}]} -> true
       entry when is_binary(entry) -> true
       _ -> false
     end)
@@ -1362,7 +1371,7 @@ defmodule Code.Formatter do
   end
 
   defp interpolation_to_algebra([entry | entries], escape, state, acc, last) do
-    {:"::", _, [{{:., _, [Kernel, :to_string]}, meta, [quoted]}, {:binary, _, _}]} = entry
+    {:::, _, [{{:., _, [Kernel, :to_string]}, meta, [quoted]}, {:binary, _, _}]} = entry
     {doc, state} = block_to_algebra(quoted, line(meta), end_line(meta), state)
     doc = surround("\#{", doc, "}")
     interpolation_to_algebra(entries, escape, state, concat(acc, doc), last)
@@ -1457,7 +1466,7 @@ defmodule Code.Formatter do
     {bitstring_wrap_parens(doc, i, last), state}
   end
 
-  defp bitstring_segment_to_algebra({{:"::", _, [segment, spec]}, i}, state, last) do
+  defp bitstring_segment_to_algebra({{:::, _, [segment, spec]}, i}, state, last) do
     {doc, state} = quoted_to_algebra(segment, :parens_arg, state)
     {spec, state} = bitstring_spec_to_algebra(spec, state)
 
@@ -2223,6 +2232,19 @@ defmodule Code.Formatter do
       )
   end
 
+  defp atom_to_keyword_key(atom) do
+    key =
+      case Code.Identifier.classify(atom) do
+        type when type in [:callable_local, :callable_operator, :not_callable] ->
+          IO.iodata_to_binary([Atom.to_string(atom), ?:])
+
+        _ ->
+          IO.iodata_to_binary([?", Atom.to_string(atom), ?", ?:])
+      end
+
+    string(key)
+  end
+
   # A literal list is a keyword or (... -> ...)
   defp last_arg_to_keyword([_ | _] = arg, _list_to_keyword?) do
     {keyword?(arg), arg}
@@ -2281,6 +2303,11 @@ defmodule Code.Formatter do
 
   defp keyword_key?({{:., _, [:erlang, :binary_to_atom]}, _, [{:<<>>, meta, _}, :utf8]}) do
     meta[:format] == :keyword
+  end
+
+  # If there's no formatter metadata and no :__block__ literals, a keyword key is any atom.
+  defp keyword_key?(atom) when is_atom(atom) do
+    true
   end
 
   defp keyword_key?(_) do
