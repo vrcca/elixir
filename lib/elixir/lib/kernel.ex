@@ -1593,6 +1593,8 @@ defmodule Kernel do
   @doc """
   Puts `value` at the given zero-based `index` in `tuple`.
 
+  It raises `ArgumentError` when index is negative or it is out of range of the tuple elements.
+
   Inlined by the compiler.
 
   ## Examples
